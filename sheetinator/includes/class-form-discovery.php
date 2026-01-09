@@ -91,19 +91,26 @@ class Sheetinator_Form_Discovery {
     /**
      * Get form fields with their labels
      *
+     * Uses Forminator_API::get_form_fields() to retrieve field definitions.
+     *
      * @param int $form_id Form ID
      * @return array Array of field info (element_id => label)
      */
     public function get_form_fields( $form_id ) {
-        $form = $this->get_form( $form_id );
+        if ( ! class_exists( 'Forminator_API' ) ) {
+            return array();
+        }
 
-        if ( ! $form || empty( $form->fields ) ) {
+        // Use the proper Forminator API method to get form fields
+        $form_fields = Forminator_API::get_form_fields( $form_id );
+
+        if ( is_wp_error( $form_fields ) || empty( $form_fields ) ) {
             return array();
         }
 
         $fields = array();
 
-        foreach ( $form->fields as $field ) {
+        foreach ( $form_fields as $field ) {
             $field_data = $this->parse_field( $field );
 
             if ( ! empty( $field_data ) ) {
@@ -117,23 +124,42 @@ class Sheetinator_Form_Discovery {
     /**
      * Parse a single field into header columns
      *
-     * @param object|array $field Field data
+     * Forminator_API::get_form_fields() returns field objects with properties:
+     * - slug: field identifier (e.g., 'text-1', 'name-1')
+     * - type: field type (e.g., 'text', 'name', 'email')
+     * - get_label_for_entry(): method to get the field label
+     * - And various type-specific properties
+     *
+     * @param object|array $field Field data from Forminator API
      * @return array Array of element_id => label pairs
      */
     private function parse_field( $field ) {
-        // Handle both object and array formats
-        $field = (array) $field;
+        // Get label BEFORE converting to array (uses method on object)
+        $label = '';
+        if ( is_object( $field ) && method_exists( $field, 'get_label_for_entry' ) ) {
+            $label = $field->get_label_for_entry();
+        }
 
-        $element_id = $field['element_id'] ?? '';
+        // Handle both object and array formats
+        if ( is_object( $field ) ) {
+            $field = get_object_vars( $field );
+        }
+
+        // If we didn't get label from method, try properties
+        if ( empty( $label ) ) {
+            $label = $this->get_field_label( $field );
+        }
+
+        // Forminator uses 'slug' as the field identifier
+        $element_id = $field['slug'] ?? $field['element_id'] ?? '';
         $type       = $field['type'] ?? '';
-        $label      = $this->get_field_label( $field );
 
         if ( empty( $element_id ) ) {
             return array();
         }
 
         // Skip certain field types that don't produce data
-        $skip_types = array( 'section', 'page-break', 'html', 'captcha', 'gdprconsent' );
+        $skip_types = array( 'section', 'page-break', 'html', 'captcha', 'gdprconsent', 'stripe', 'paypal' );
 
         if ( in_array( $type, $skip_types, true ) ) {
             return array();
@@ -170,19 +196,39 @@ class Sheetinator_Form_Discovery {
     /**
      * Get field label from field data
      *
+     * Forminator stores labels in various properties depending on field type.
+     * This method checks multiple possible sources.
+     *
      * @param array $field Field data
      * @return string Field label
      */
     private function get_field_label( $field ) {
-        // Try different label sources
-        $label = $field['field_label'] ?? '';
+        // Try different label sources - Forminator uses various property names
+        $possible_keys = array(
+            'field_label',
+            'field-label',
+            'label',
+            'title',
+            'placeholder',
+            'name',
+        );
 
-        if ( empty( $label ) ) {
-            $label = $field['placeholder'] ?? '';
+        $label = '';
+
+        foreach ( $possible_keys as $key ) {
+            if ( ! empty( $field[ $key ] ) && is_string( $field[ $key ] ) ) {
+                $label = $field[ $key ];
+                break;
+            }
         }
 
+        // If still empty, use the slug/element_id as fallback
         if ( empty( $label ) ) {
-            $label = $field['label'] ?? '';
+            $slug = $field['slug'] ?? $field['element_id'] ?? '';
+            if ( ! empty( $slug ) ) {
+                // Convert slug like "text-1" to "Text 1"
+                $label = ucwords( str_replace( array( '-', '_' ), ' ', $slug ) );
+            }
         }
 
         // Clean up the label
@@ -200,26 +246,29 @@ class Sheetinator_Form_Discovery {
      * @return array
      */
     private function parse_name_field( $field, $base_label ) {
-        $element_id = $field['element_id'];
+        $element_id = $field['slug'] ?? $field['element_id'] ?? '';
         $prefix     = $base_label ?: 'Name';
         $columns    = array();
 
-        // Check which components are enabled
+        // Check which components are enabled based on field settings
+        // Forminator stores these as boolean flags
         $components = array(
-            'prefix'      => 'Prefix',
-            'first-name'  => 'First Name',
-            'middle-name' => 'Middle Name',
-            'last-name'   => 'Last Name',
+            'prefix'      => array( 'label' => 'Prefix', 'setting' => 'prefix' ),
+            'first-name'  => array( 'label' => 'First Name', 'setting' => 'fname' ),
+            'middle-name' => array( 'label' => 'Middle Name', 'setting' => 'mname' ),
+            'last-name'   => array( 'label' => 'Last Name', 'setting' => 'lname' ),
         );
 
-        foreach ( $components as $key => $label ) {
-            $field_key = str_replace( '-', '_', $key );
+        foreach ( $components as $key => $config ) {
+            $setting_key = $config['setting'];
 
-            // Check if this component is enabled (default to first/last name enabled)
-            if ( in_array( $key, array( 'first-name', 'last-name' ), true ) ) {
-                $columns[ $element_id . '-' . $key ] = $prefix . ' - ' . $label;
-            } elseif ( ! empty( $field[ $field_key ] ) ) {
-                $columns[ $element_id . '-' . $key ] = $prefix . ' - ' . $label;
+            // Check if this component is enabled
+            // Default: first-name and last-name are typically enabled
+            $is_default_enabled = in_array( $key, array( 'first-name', 'last-name' ), true );
+            $is_enabled = isset( $field[ $setting_key ] ) ? ! empty( $field[ $setting_key ] ) : $is_default_enabled;
+
+            if ( $is_enabled ) {
+                $columns[ $element_id . '-' . $key ] = $prefix . ' - ' . $config['label'];
             }
         }
 
@@ -239,7 +288,7 @@ class Sheetinator_Form_Discovery {
      * @return array
      */
     private function parse_address_field( $field, $base_label ) {
-        $element_id = $field['element_id'];
+        $element_id = $field['slug'] ?? $field['element_id'] ?? '';
         $prefix     = $base_label ?: 'Address';
 
         $components = array(
@@ -269,7 +318,7 @@ class Sheetinator_Form_Discovery {
      * @return array
      */
     private function parse_time_field( $field, $label ) {
-        $element_id = $field['element_id'];
+        $element_id = $field['slug'] ?? $field['element_id'] ?? '';
         $prefix     = $label ?: 'Time';
 
         return array(
@@ -286,7 +335,7 @@ class Sheetinator_Form_Discovery {
      * @return array
      */
     private function parse_postdata_field( $field, $label ) {
-        $element_id = $field['element_id'];
+        $element_id = $field['slug'] ?? $field['element_id'] ?? '';
         $prefix     = $label ?: 'Post';
 
         return array(
@@ -303,7 +352,7 @@ class Sheetinator_Form_Discovery {
      * @return array
      */
     private function parse_group_field( $field ) {
-        $element_id = $field['element_id'];
+        $element_id = $field['slug'] ?? $field['element_id'] ?? '';
         $label      = $this->get_field_label( $field ) ?: 'Group';
 
         // For groups, we'll store as JSON since rows can vary

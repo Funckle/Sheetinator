@@ -215,8 +215,19 @@ class Sheetinator_Google_Sheets {
             return new WP_Error( 'not_authenticated', __( 'Not authenticated with Google.', 'sheetinator' ) );
         }
 
+        // Debug: Log what we're sending to Google
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf( '[Sheetinator] set_headers called with %d headers', count( $headers ) ) );
+            error_log( '[Sheetinator] Headers to set: ' . wp_json_encode( array_slice( $headers, 0, 10 ) ) . '...' );
+        }
+
         $range = 'Submissions!A1:' . $this->column_letter( count( $headers ) ) . '1';
         $url   = self::SHEETS_API . '/' . $spreadsheet_id . '/values/' . rawurlencode( $range ) . '?valueInputOption=RAW';
+
+        // Debug: Log the API call
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[Sheetinator] API Range: ' . $range );
+        }
 
         $response = wp_remote_request( $url, array(
             'method'  => 'PUT',
@@ -231,13 +242,19 @@ class Sheetinator_Google_Sheets {
         ) );
 
         if ( is_wp_error( $response ) ) {
+            error_log( '[Sheetinator] set_headers WP_Error: ' . $response->get_error_message() );
             return $response;
         }
 
         $status_code = wp_remote_retrieve_response_code( $response );
+        $response_body = wp_remote_retrieve_body( $response );
+
+        // Always log the response for debugging
+        error_log( '[Sheetinator] set_headers response code: ' . $status_code );
+        error_log( '[Sheetinator] set_headers response body: ' . $response_body );
 
         if ( $status_code !== 200 ) {
-            $body          = json_decode( wp_remote_retrieve_body( $response ), true );
+            $body          = json_decode( $response_body, true );
             $error_message = $body['error']['message'] ?? __( 'Failed to set headers.', 'sheetinator' );
             return new WP_Error( 'api_error', $error_message );
         }
@@ -324,10 +341,25 @@ class Sheetinator_Google_Sheets {
      * @return bool|WP_Error True on success, WP_Error on failure
      */
     public function append_row( $spreadsheet_id, $values ) {
+        return $this->append_rows( $spreadsheet_id, array( $values ) );
+    }
+
+    /**
+     * Append multiple rows of data to a spreadsheet (batch operation)
+     *
+     * @param string $spreadsheet_id Spreadsheet ID
+     * @param array  $rows           Array of row arrays
+     * @return bool|WP_Error True on success, WP_Error on failure
+     */
+    public function append_rows( $spreadsheet_id, $rows ) {
         $access_token = $this->auth->get_access_token();
 
         if ( ! $access_token ) {
             return new WP_Error( 'not_authenticated', __( 'Not authenticated with Google.', 'sheetinator' ) );
+        }
+
+        if ( empty( $rows ) ) {
+            return true;
         }
 
         $range = 'Submissions!A:A';
@@ -338,13 +370,13 @@ class Sheetinator_Google_Sheets {
         ) );
 
         $response = wp_remote_post( $url, array(
-            'timeout' => 30,
+            'timeout' => 60, // Longer timeout for batch operations
             'headers' => array(
                 'Authorization' => 'Bearer ' . $access_token,
                 'Content-Type'  => 'application/json',
             ),
             'body' => wp_json_encode( array(
-                'values' => array( $values ),
+                'values' => $rows,
             ) ),
         ) );
 

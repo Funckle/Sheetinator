@@ -159,6 +159,14 @@ class Sheetinator_Admin {
             check_admin_referer( 'sheetinator_resync' );
 
             $form_id = absint( $_GET['form_id'] );
+
+            // Debug: Get headers before resync to show in notice
+            $headers = $this->plugin->form_discovery->build_headers( $form_id );
+            $header_count = count( $headers );
+
+            // Store headers in transient for debugging
+            set_transient( 'sheetinator_debug_headers', $headers, 300 );
+
             $result  = $this->plugin->sync_handler->resync_form( $form_id );
 
             if ( is_wp_error( $result ) ) {
@@ -167,9 +175,97 @@ class Sheetinator_Admin {
                     'message' => sprintf( __( 'Failed to resync form: %s', 'sheetinator' ), $result->get_error_message() ),
                 ), 60 );
             } else {
+                // Get the new spreadsheet URL
+                $spreadsheet_url = $result['spreadsheet_url'] ?? '';
                 set_transient( 'sheetinator_notice', array(
                     'type'    => 'success',
-                    'message' => __( 'Form resynced successfully. A new spreadsheet has been created.', 'sheetinator' ),
+                    'message' => sprintf(
+                        __( 'Form resynced with %d columns. First headers: [%s]. Spreadsheet: %s', 'sheetinator' ),
+                        $header_count,
+                        implode( ', ', array_slice( $headers, 0, 6 ) ),
+                        $spreadsheet_url
+                    ),
+                ), 60 );
+            }
+
+            wp_safe_redirect( admin_url( 'admin.php?page=sheetinator' ) );
+            exit;
+        }
+
+        // Import existing entries
+        if ( isset( $_GET['action'] ) && $_GET['action'] === 'import' && isset( $_GET['form_id'] ) ) {
+            check_admin_referer( 'sheetinator_import' );
+
+            $form_id = absint( $_GET['form_id'] );
+
+            $result = $this->plugin->sync_handler->import_existing_entries( $form_id );
+
+            // Build debug info from result
+            $debug_info = '';
+            if ( ! empty( $result['debug'] ) ) {
+                $debug = $result['debug'];
+
+                $parts = array();
+
+                if ( isset( $debug['sample_entry'] ) ) {
+                    $se = $debug['sample_entry'];
+                    $parts[] = sprintf(
+                        'Entry keys: [%s]',
+                        implode( ', ', array_slice( $se['meta_keys_found'], 0, 5 ) ) ?: 'none'
+                    );
+                    $parts[] = sprintf(
+                        'Expected IDs: [%s]',
+                        implode( ', ', array_slice( $se['expected_field_ids'], 0, 5 ) )
+                    );
+                    $parts[] = sprintf(
+                        'has_get_meta: %s',
+                        $se['has_get_meta'] ? 'yes' : 'no'
+                    );
+                    if ( ! empty( $se['sample_values'] ) ) {
+                        $sample_vals = array();
+                        foreach ( $se['sample_values'] as $k => $v ) {
+                            $sample_vals[] = $k . '=' . ( is_array( $v ) ? 'array' : substr( (string) $v, 0, 20 ) );
+                        }
+                        $parts[] = 'Sample: ' . implode( ', ', $sample_vals );
+                    }
+                }
+
+                if ( isset( $debug['sample_row'] ) ) {
+                    $row_preview = array_map( function( $v ) {
+                        return is_string( $v ) ? substr( $v, 0, 15 ) : '?';
+                    }, $debug['sample_row'] );
+                    $parts[] = sprintf( 'Row preview: [%s]', implode( ' | ', $row_preview ) );
+                }
+
+                if ( ! empty( $parts ) ) {
+                    $debug_info = ' [DEBUG: ' . implode( ' | ', $parts ) . ']';
+                }
+            }
+
+            if ( ! empty( $result['errors'] ) && $result['imported'] === 0 ) {
+                set_transient( 'sheetinator_notice', array(
+                    'type'    => 'error',
+                    'message' => sprintf(
+                        __( 'Import failed: %s', 'sheetinator' ),
+                        implode( ', ', array_slice( $result['errors'], 0, 3 ) )
+                    ) . $debug_info,
+                ), 60 );
+            } else {
+                $message = sprintf(
+                    __( 'Import complete! %d of %d entries imported.', 'sheetinator' ),
+                    $result['imported'],
+                    $result['total']
+                );
+
+                if ( $result['failed'] > 0 ) {
+                    $message .= sprintf( __( ' (%d failed)', 'sheetinator' ), $result['failed'] );
+                }
+
+                $message .= $debug_info;
+
+                set_transient( 'sheetinator_notice', array(
+                    'type'    => $result['failed'] > 0 ? 'warning' : 'success',
+                    'message' => $message,
                 ), 60 );
             }
 
@@ -466,6 +562,14 @@ class Sheetinator_Admin {
                                     </td>
                                     <td>
                                         <?php if ( $form['synced'] ) : ?>
+                                            <a href="<?php echo esc_url( wp_nonce_url(
+                                                admin_url( 'admin.php?page=sheetinator&action=import&form_id=' . $form['id'] ),
+                                                'sheetinator_import'
+                                            ) ); ?>"
+                                               class="button button-small button-primary"
+                                               title="<?php esc_attr_e( 'Import all existing Forminator entries to Google Sheets', 'sheetinator' ); ?>">
+                                                <?php esc_html_e( 'Import', 'sheetinator' ); ?>
+                                            </a>
                                             <a href="<?php echo esc_url( wp_nonce_url(
                                                 admin_url( 'admin.php?page=sheetinator&action=resync&form_id=' . $form['id'] ),
                                                 'sheetinator_resync'
