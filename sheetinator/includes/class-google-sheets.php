@@ -215,8 +215,19 @@ class Sheetinator_Google_Sheets {
             return new WP_Error( 'not_authenticated', __( 'Not authenticated with Google.', 'sheetinator' ) );
         }
 
+        // Debug: Log what we're sending to Google
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf( '[Sheetinator] set_headers called with %d headers', count( $headers ) ) );
+            error_log( '[Sheetinator] Headers to set: ' . wp_json_encode( array_slice( $headers, 0, 10 ) ) . '...' );
+        }
+
         $range = 'Submissions!A1:' . $this->column_letter( count( $headers ) ) . '1';
         $url   = self::SHEETS_API . '/' . $spreadsheet_id . '/values/' . rawurlencode( $range ) . '?valueInputOption=RAW';
+
+        // Debug: Log the API call
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[Sheetinator] API Range: ' . $range );
+        }
 
         $response = wp_remote_request( $url, array(
             'method'  => 'PUT',

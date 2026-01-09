@@ -159,6 +159,11 @@ class Sheetinator_Admin {
             check_admin_referer( 'sheetinator_resync' );
 
             $form_id = absint( $_GET['form_id'] );
+
+            // Debug: Get headers before resync to show in notice
+            $headers = $this->plugin->form_discovery->build_headers( $form_id );
+            $header_count = count( $headers );
+
             $result  = $this->plugin->sync_handler->resync_form( $form_id );
 
             if ( is_wp_error( $result ) ) {
@@ -169,7 +174,11 @@ class Sheetinator_Admin {
             } else {
                 set_transient( 'sheetinator_notice', array(
                     'type'    => 'success',
-                    'message' => __( 'Form resynced successfully. A new spreadsheet has been created.', 'sheetinator' ),
+                    'message' => sprintf(
+                        __( 'Form resynced successfully with %d columns. Headers: %s', 'sheetinator' ),
+                        $header_count,
+                        implode( ', ', array_slice( $headers, 0, 8 ) ) . ( $header_count > 8 ? '...' : '' )
+                    ),
                 ), 60 );
             }
 

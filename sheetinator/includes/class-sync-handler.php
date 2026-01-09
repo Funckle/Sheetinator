@@ -301,6 +301,12 @@ class Sheetinator_Sync_Handler {
         $form_title = $this->discovery->get_form_title( $form_id );
         $headers    = $this->discovery->build_headers( $form_id );
 
+        // Debug: Log headers being created
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf( '[Sheetinator] Creating spreadsheet for form %d with %d headers', $form_id, count( $headers ) ) );
+            error_log( '[Sheetinator] Headers: ' . wp_json_encode( $headers ) );
+        }
+
         // Create unique spreadsheet title
         $sheet_title = $this->generate_unique_title( $form_title, $form_id );
 
@@ -308,6 +314,7 @@ class Sheetinator_Sync_Handler {
         $result = $this->sheets->create_spreadsheet( $sheet_title, $headers );
 
         if ( is_wp_error( $result ) ) {
+            error_log( '[Sheetinator] Spreadsheet creation error: ' . $result->get_error_message() );
             return $result;
         }
 
