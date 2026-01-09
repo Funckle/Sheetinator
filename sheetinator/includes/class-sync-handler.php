@@ -411,6 +411,10 @@ class Sheetinator_Sync_Handler {
             return $result;
         }
 
+        // Reverse entries so oldest is first (chronological order)
+        // This way new submissions append at the bottom naturally
+        $entries = array_reverse( $entries );
+
         $result['total'] = count( $entries );
 
         // Get field IDs for mapping
