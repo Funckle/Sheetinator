@@ -377,6 +377,7 @@ class Sheetinator_Sync_Handler {
             'failed'   => 0,
             'total'    => 0,
             'errors'   => array(),
+            'debug'    => array(),
         );
 
         // Check if form has a spreadsheet mapping
@@ -415,10 +416,18 @@ class Sheetinator_Sync_Handler {
         // Get field IDs for mapping
         $field_ids = $this->discovery->get_field_ids( $form_id );
 
+        // Add field IDs to debug
+        $result['debug']['field_ids'] = array_slice( $field_ids, 0, 10 );
+
         // Transform all entries to rows
         $all_rows = array();
         foreach ( $entries as $entry ) {
-            $all_rows[] = $this->transform_entry( $entry, $form_id, $field_ids );
+            $all_rows[] = $this->transform_entry( $entry, $form_id, $field_ids, $result['debug'] );
+        }
+
+        // Add sample row to debug (first entry's data)
+        if ( ! empty( $all_rows ) ) {
+            $result['debug']['sample_row'] = array_slice( $all_rows[0], 0, 8 );
         }
 
         // Batch append rows (500 at a time to stay within limits)
@@ -454,13 +463,17 @@ class Sheetinator_Sync_Handler {
      * @param object $entry     Entry object from Forminator_API
      * @param int    $form_id   Form ID
      * @param array  $field_ids Field IDs in order
+     * @param array  &$debug    Debug info array (passed by reference)
      * @return array Row data
      */
-    private function transform_entry( $entry, $form_id, $field_ids ) {
+    private function transform_entry( $entry, $form_id, $field_ids, &$debug = null ) {
         $row = array();
 
+        // Get entry ID
+        $entry_id = $entry->entry_id ?? ( is_object( $entry ) ? $entry->entry_id : '' );
+
         // Add standard columns
-        $row[] = $entry->entry_id ?? '';
+        $row[] = $entry_id;
         $row[] = wp_date( 'Y-m-d', strtotime( $entry->date_created ?? 'now' ) );
         $row[] = wp_date( 'H:i:s', strtotime( $entry->date_created ?? 'now' ) );
 
@@ -468,47 +481,95 @@ class Sheetinator_Sync_Handler {
         $data_lookup = array();
         $ip = '';
 
-        if ( isset( $entry->meta_data ) && is_array( $entry->meta_data ) ) {
-            foreach ( $entry->meta_data as $meta ) {
-                // Handle both array and object formats
-                if ( is_object( $meta ) ) {
-                    $name = $meta->name ?? '';
-                    $value = $meta->value ?? '';
-                } else {
-                    $name = $meta['name'] ?? '';
-                    $value = $meta['value'] ?? '';
+        // Try to get full entry data if meta_data is not populated
+        $full_entry = null;
+        if ( ( ! isset( $entry->meta_data ) || empty( $entry->meta_data ) ) && ! empty( $entry_id ) ) {
+            $full_entry = Forminator_API::get_entry( $form_id, $entry_id );
+            if ( ! is_wp_error( $full_entry ) && $full_entry ) {
+                $entry = $full_entry;
+            }
+        }
+
+        // Method 1: Try using get_meta() method if available (Forminator entry model)
+        if ( is_object( $entry ) && method_exists( $entry, 'get_meta' ) ) {
+            foreach ( $field_ids as $field_id ) {
+                // Get the base field ID (without compound suffixes)
+                $base_id = preg_replace( '/-(first-name|last-name|middle-name|prefix|street_address|address_line|city|state|zip|country|hours|minutes)$/', '', $field_id );
+
+                $value = $entry->get_meta( $base_id, '' );
+                if ( $value !== '' && $value !== null ) {
+                    $data_lookup[ $base_id ] = maybe_unserialize( $value );
                 }
+            }
 
-                if ( empty( $name ) ) {
-                    continue;
+            // Get IP
+            $ip = $entry->get_meta( '_forminator_user_ip', '' );
+        }
+
+        // Method 2: Parse meta_data array/object if get_meta didn't work or wasn't available
+        if ( empty( $data_lookup ) && isset( $entry->meta_data ) ) {
+            $meta_data = $entry->meta_data;
+
+            // If meta_data is an object, convert to array
+            if ( is_object( $meta_data ) ) {
+                $meta_data = get_object_vars( $meta_data );
+            }
+
+            if ( is_array( $meta_data ) ) {
+                foreach ( $meta_data as $key => $meta ) {
+                    // Handle associative array (field_slug => value)
+                    if ( is_string( $key ) && ! is_numeric( $key ) ) {
+                        $name = $key;
+                        $value = $meta;
+                    }
+                    // Handle array of objects/arrays with name/value pairs
+                    elseif ( is_object( $meta ) ) {
+                        $name = $meta->meta_key ?? $meta->name ?? '';
+                        $value = $meta->meta_value ?? $meta->value ?? '';
+                    }
+                    elseif ( is_array( $meta ) ) {
+                        $name = $meta['meta_key'] ?? $meta['name'] ?? '';
+                        $value = $meta['meta_value'] ?? $meta['value'] ?? '';
+                    }
+                    else {
+                        continue;
+                    }
+
+                    if ( empty( $name ) ) {
+                        continue;
+                    }
+
+                    // Get IP address
+                    if ( $name === '_forminator_user_ip' ) {
+                        $ip = $value;
+                        continue;
+                    }
+
+                    // Skip other internal meta fields
+                    if ( strpos( $name, '_' ) === 0 ) {
+                        continue;
+                    }
+
+                    // Unserialize value if needed
+                    $value = maybe_unserialize( $value );
+
+                    $data_lookup[ $name ] = $value;
                 }
-
-                // Get IP address
-                if ( $name === '_forminator_user_ip' ) {
-                    $ip = $value;
-                    continue;
-                }
-
-                // Skip other internal meta fields
-                if ( strpos( $name, '_' ) === 0 ) {
-                    continue;
-                }
-
-                // Unserialize value if needed (Forminator stores compound fields serialized)
-                $value = maybe_unserialize( $value );
-
-                $data_lookup[ $name ] = $value;
             }
         }
 
         $row[] = $ip;
 
-        // Debug: Log first entry's data lookup
-        static $logged_sample = false;
-        if ( ! $logged_sample ) {
-            error_log( '[Sheetinator] Sample entry meta keys: ' . wp_json_encode( array_keys( $data_lookup ) ) );
-            error_log( '[Sheetinator] Expected field IDs: ' . wp_json_encode( array_slice( $field_ids, 0, 10 ) ) );
-            $logged_sample = true;
+        // Collect debug info for first entry only
+        if ( is_array( $debug ) && ! isset( $debug['sample_entry'] ) ) {
+            $debug['sample_entry'] = array(
+                'entry_id'          => $entry_id,
+                'meta_keys_found'   => array_keys( $data_lookup ),
+                'expected_field_ids' => array_slice( $field_ids, 0, 10 ),
+                'meta_data_type'    => isset( $entry->meta_data ) ? gettype( $entry->meta_data ) : 'not set',
+                'has_get_meta'      => is_object( $entry ) && method_exists( $entry, 'get_meta' ),
+                'sample_values'     => array_slice( $data_lookup, 0, 3, true ),
+            );
         }
 
         // Add field values in order

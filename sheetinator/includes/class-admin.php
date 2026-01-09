@@ -198,32 +198,49 @@ class Sheetinator_Admin {
 
             $form_id = absint( $_GET['form_id'] );
 
-            // Debug: Get a sample entry to see its structure
+            $result = $this->plugin->sync_handler->import_existing_entries( $form_id );
+
+            // Build debug info from result
             $debug_info = '';
-            if ( class_exists( 'Forminator_API' ) ) {
-                $entries = Forminator_API::get_form_entries( $form_id );
-                if ( ! empty( $entries ) && ! is_wp_error( $entries ) ) {
-                    $sample_entry = $entries[0];
-                    $meta_keys = array();
-                    if ( isset( $sample_entry->meta_data ) && is_array( $sample_entry->meta_data ) ) {
-                        foreach ( $sample_entry->meta_data as $meta ) {
-                            if ( is_object( $meta ) ) {
-                                $meta_keys[] = $meta->name ?? '?';
-                            } else {
-                                $meta_keys[] = $meta['name'] ?? '?';
-                            }
-                        }
-                    }
-                    $field_ids = $this->plugin->form_discovery->get_field_ids( $form_id );
-                    $debug_info = sprintf(
-                        ' [DEBUG: Entry has keys: %s | Expected field IDs: %s]',
-                        implode( ', ', array_slice( $meta_keys, 0, 5 ) ),
-                        implode( ', ', array_slice( $field_ids, 0, 5 ) )
+            if ( ! empty( $result['debug'] ) ) {
+                $debug = $result['debug'];
+
+                $parts = array();
+
+                if ( isset( $debug['sample_entry'] ) ) {
+                    $se = $debug['sample_entry'];
+                    $parts[] = sprintf(
+                        'Entry keys: [%s]',
+                        implode( ', ', array_slice( $se['meta_keys_found'], 0, 5 ) ) ?: 'none'
                     );
+                    $parts[] = sprintf(
+                        'Expected IDs: [%s]',
+                        implode( ', ', array_slice( $se['expected_field_ids'], 0, 5 ) )
+                    );
+                    $parts[] = sprintf(
+                        'has_get_meta: %s',
+                        $se['has_get_meta'] ? 'yes' : 'no'
+                    );
+                    if ( ! empty( $se['sample_values'] ) ) {
+                        $sample_vals = array();
+                        foreach ( $se['sample_values'] as $k => $v ) {
+                            $sample_vals[] = $k . '=' . ( is_array( $v ) ? 'array' : substr( (string) $v, 0, 20 ) );
+                        }
+                        $parts[] = 'Sample: ' . implode( ', ', $sample_vals );
+                    }
+                }
+
+                if ( isset( $debug['sample_row'] ) ) {
+                    $row_preview = array_map( function( $v ) {
+                        return is_string( $v ) ? substr( $v, 0, 15 ) : '?';
+                    }, $debug['sample_row'] );
+                    $parts[] = sprintf( 'Row preview: [%s]', implode( ' | ', $row_preview ) );
+                }
+
+                if ( ! empty( $parts ) ) {
+                    $debug_info = ' [DEBUG: ' . implode( ' | ', $parts ) . ']';
                 }
             }
-
-            $result = $this->plugin->sync_handler->import_existing_entries( $form_id );
 
             if ( ! empty( $result['errors'] ) && $result['imported'] === 0 ) {
                 set_transient( 'sheetinator_notice', array(
