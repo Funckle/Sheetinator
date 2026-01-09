@@ -139,6 +139,14 @@ class Sheetinator_Form_Discovery {
             $field = get_object_vars( $field );
         }
 
+        // Debug: Log first field structure to understand Forminator's format
+        static $logged_sample = false;
+        if ( ! $logged_sample ) {
+            error_log( '[Sheetinator] Sample field structure: ' . wp_json_encode( array_keys( $field ) ) );
+            error_log( '[Sheetinator] Sample field data: ' . wp_json_encode( $field ) );
+            $logged_sample = true;
+        }
+
         // Forminator uses 'slug' as the field identifier
         $element_id = $field['slug'] ?? $field['element_id'] ?? '';
         $type       = $field['type'] ?? '';
@@ -186,19 +194,39 @@ class Sheetinator_Form_Discovery {
     /**
      * Get field label from field data
      *
+     * Forminator stores labels in various properties depending on field type.
+     * This method checks multiple possible sources.
+     *
      * @param array $field Field data
      * @return string Field label
      */
     private function get_field_label( $field ) {
-        // Try different label sources
-        $label = $field['field_label'] ?? '';
+        // Try different label sources - Forminator uses various property names
+        $possible_keys = array(
+            'field_label',
+            'field-label',
+            'label',
+            'title',
+            'placeholder',
+            'name',
+        );
 
-        if ( empty( $label ) ) {
-            $label = $field['placeholder'] ?? '';
+        $label = '';
+
+        foreach ( $possible_keys as $key ) {
+            if ( ! empty( $field[ $key ] ) && is_string( $field[ $key ] ) ) {
+                $label = $field[ $key ];
+                break;
+            }
         }
 
+        // If still empty, use the slug/element_id as fallback
         if ( empty( $label ) ) {
-            $label = $field['label'] ?? '';
+            $slug = $field['slug'] ?? $field['element_id'] ?? '';
+            if ( ! empty( $slug ) ) {
+                // Convert slug like "text-1" to "Text 1"
+                $label = ucwords( str_replace( array( '-', '_' ), ' ', $slug ) );
+            }
         }
 
         // Clean up the label
