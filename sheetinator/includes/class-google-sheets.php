@@ -341,10 +341,25 @@ class Sheetinator_Google_Sheets {
      * @return bool|WP_Error True on success, WP_Error on failure
      */
     public function append_row( $spreadsheet_id, $values ) {
+        return $this->append_rows( $spreadsheet_id, array( $values ) );
+    }
+
+    /**
+     * Append multiple rows of data to a spreadsheet (batch operation)
+     *
+     * @param string $spreadsheet_id Spreadsheet ID
+     * @param array  $rows           Array of row arrays
+     * @return bool|WP_Error True on success, WP_Error on failure
+     */
+    public function append_rows( $spreadsheet_id, $rows ) {
         $access_token = $this->auth->get_access_token();
 
         if ( ! $access_token ) {
             return new WP_Error( 'not_authenticated', __( 'Not authenticated with Google.', 'sheetinator' ) );
+        }
+
+        if ( empty( $rows ) ) {
+            return true;
         }
 
         $range = 'Submissions!A:A';
@@ -355,13 +370,13 @@ class Sheetinator_Google_Sheets {
         ) );
 
         $response = wp_remote_post( $url, array(
-            'timeout' => 30,
+            'timeout' => 60, // Longer timeout for batch operations
             'headers' => array(
                 'Authorization' => 'Bearer ' . $access_token,
                 'Content-Type'  => 'application/json',
             ),
             'body' => wp_json_encode( array(
-                'values' => array( $values ),
+                'values' => $rows,
             ) ),
         ) );
 

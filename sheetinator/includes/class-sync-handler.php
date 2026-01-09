@@ -365,6 +365,9 @@ class Sheetinator_Sync_Handler {
     /**
      * Import existing entries from Forminator to Google Sheets
      *
+     * Uses batch operations to avoid Google API rate limits.
+     * Sends up to 500 rows per API call.
+     *
      * @param int $form_id Form ID
      * @return array Result with counts
      */
@@ -412,21 +415,33 @@ class Sheetinator_Sync_Handler {
         // Get field IDs for mapping
         $field_ids = $this->discovery->get_field_ids( $form_id );
 
-        // Process each entry
+        // Transform all entries to rows
+        $all_rows = array();
         foreach ( $entries as $entry ) {
-            $row_data = $this->transform_entry( $entry, $form_id, $field_ids );
+            $all_rows[] = $this->transform_entry( $entry, $form_id, $field_ids );
+        }
 
-            $append_result = $this->sheets->append_row( $spreadsheet_id, $row_data );
+        // Batch append rows (500 at a time to stay within limits)
+        $batch_size = 500;
+        $batches = array_chunk( $all_rows, $batch_size );
+
+        foreach ( $batches as $batch_index => $batch ) {
+            $append_result = $this->sheets->append_rows( $spreadsheet_id, $batch );
 
             if ( is_wp_error( $append_result ) ) {
-                $result['failed']++;
+                $result['failed'] += count( $batch );
                 $result['errors'][] = sprintf(
-                    __( 'Entry #%d: %s', 'sheetinator' ),
-                    $entry->entry_id ?? 0,
+                    __( 'Batch %d failed: %s', 'sheetinator' ),
+                    $batch_index + 1,
                     $append_result->get_error_message()
                 );
             } else {
-                $result['imported']++;
+                $result['imported'] += count( $batch );
+            }
+
+            // Small delay between batches to avoid rate limits
+            if ( count( $batches ) > 1 && $batch_index < count( $batches ) - 1 ) {
+                sleep( 1 );
             }
         }
 
