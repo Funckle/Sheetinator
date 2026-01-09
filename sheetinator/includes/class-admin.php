@@ -164,6 +164,9 @@ class Sheetinator_Admin {
             $headers = $this->plugin->form_discovery->build_headers( $form_id );
             $header_count = count( $headers );
 
+            // Store headers in transient for debugging
+            set_transient( 'sheetinator_debug_headers', $headers, 300 );
+
             $result  = $this->plugin->sync_handler->resync_form( $form_id );
 
             if ( is_wp_error( $result ) ) {
@@ -172,12 +175,15 @@ class Sheetinator_Admin {
                     'message' => sprintf( __( 'Failed to resync form: %s', 'sheetinator' ), $result->get_error_message() ),
                 ), 60 );
             } else {
+                // Get the new spreadsheet URL
+                $spreadsheet_url = $result['spreadsheet_url'] ?? '';
                 set_transient( 'sheetinator_notice', array(
                     'type'    => 'success',
                     'message' => sprintf(
-                        __( 'Form resynced successfully with %d columns. Headers: %s', 'sheetinator' ),
+                        __( 'Form resynced with %d columns. First headers: [%s]. Spreadsheet: %s', 'sheetinator' ),
                         $header_count,
-                        implode( ', ', array_slice( $headers, 0, 8 ) ) . ( $header_count > 8 ? '...' : '' )
+                        implode( ', ', array_slice( $headers, 0, 6 ) ),
+                        $spreadsheet_url
                     ),
                 ), 60 );
             }

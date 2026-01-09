@@ -242,13 +242,19 @@ class Sheetinator_Google_Sheets {
         ) );
 
         if ( is_wp_error( $response ) ) {
+            error_log( '[Sheetinator] set_headers WP_Error: ' . $response->get_error_message() );
             return $response;
         }
 
         $status_code = wp_remote_retrieve_response_code( $response );
+        $response_body = wp_remote_retrieve_body( $response );
+
+        // Always log the response for debugging
+        error_log( '[Sheetinator] set_headers response code: ' . $status_code );
+        error_log( '[Sheetinator] set_headers response body: ' . $response_body );
 
         if ( $status_code !== 200 ) {
-            $body          = json_decode( wp_remote_retrieve_body( $response ), true );
+            $body          = json_decode( $response_body, true );
             $error_message = $body['error']['message'] ?? __( 'Failed to set headers.', 'sheetinator' );
             return new WP_Error( 'api_error', $error_message );
         }
