@@ -103,12 +103,15 @@ class Sheetinator_Sync_Handler {
         // Get field IDs in order
         $field_ids = $this->discovery->get_field_ids( $form_id );
 
+        // Get options map for radio/select/checkbox fields (value -> label mapping)
+        $options_map = $this->discovery->get_field_options_map( $form_id );
+
         // Build a lookup of submitted data by element_id
         $data_lookup = $this->build_data_lookup( $field_data );
 
         // Add field values in order
         foreach ( $field_ids as $field_id ) {
-            $row[] = $this->get_field_value( $field_id, $data_lookup );
+            $row[] = $this->get_field_value( $field_id, $data_lookup, $options_map );
         }
 
         return $row;
@@ -140,36 +143,88 @@ class Sheetinator_Sync_Handler {
      *
      * @param string $field_id    Field ID
      * @param array  $data_lookup Data lookup array
+     * @param array  $options_map Options mapping for radio/select/checkbox fields
      * @return string Field value
      */
-    private function get_field_value( $field_id, $data_lookup ) {
+    private function get_field_value( $field_id, $data_lookup, $options_map = array() ) {
+        $value = null;
+
         // Direct match
         if ( isset( $data_lookup[ $field_id ] ) ) {
-            return $this->format_value( $data_lookup[ $field_id ] );
+            $value = $data_lookup[ $field_id ];
         }
 
         // Check for compound field parts (e.g., name-1-first-name)
         // The field_id might be "name-1-first-name" but data might be under "name-1"
-        $base_id = preg_replace( '/-(first-name|last-name|middle-name|prefix|street_address|address_line|city|state|zip|country|hours|minutes)$/', '', $field_id );
+        if ( $value === null ) {
+            $base_id = preg_replace( '/-(first-name|last-name|middle-name|prefix|street_address|address_line|city|state|zip|country|hours|minutes)$/', '', $field_id );
 
-        if ( $base_id !== $field_id && isset( $data_lookup[ $base_id ] ) ) {
-            $compound_data = $data_lookup[ $base_id ];
+            if ( $base_id !== $field_id && isset( $data_lookup[ $base_id ] ) ) {
+                $compound_data = $data_lookup[ $base_id ];
 
-            // Extract the specific part
-            $part = str_replace( $base_id . '-', '', $field_id );
+                // Extract the specific part
+                $part = str_replace( $base_id . '-', '', $field_id );
 
-            if ( is_array( $compound_data ) && isset( $compound_data[ $part ] ) ) {
-                return $this->format_value( $compound_data[ $part ] );
-            }
+                if ( is_array( $compound_data ) && isset( $compound_data[ $part ] ) ) {
+                    $value = $compound_data[ $part ];
+                }
 
-            // Handle hyphenated keys (e.g., first-name vs first_name)
-            $part_underscore = str_replace( '-', '_', $part );
-            if ( is_array( $compound_data ) && isset( $compound_data[ $part_underscore ] ) ) {
-                return $this->format_value( $compound_data[ $part_underscore ] );
+                // Handle hyphenated keys (e.g., first-name vs first_name)
+                if ( $value === null ) {
+                    $part_underscore = str_replace( '-', '_', $part );
+                    if ( is_array( $compound_data ) && isset( $compound_data[ $part_underscore ] ) ) {
+                        $value = $compound_data[ $part_underscore ];
+                    }
+                }
             }
         }
 
-        return '';
+        if ( $value === null ) {
+            return '';
+        }
+
+        // Convert option values to labels for radio/select/checkbox fields
+        $value = $this->convert_option_value_to_label( $field_id, $value, $options_map );
+
+        return $this->format_value( $value );
+    }
+
+    /**
+     * Convert option values to their labels for radio/select/checkbox fields
+     *
+     * @param string $field_id    Field ID
+     * @param mixed  $value       The stored value
+     * @param array  $options_map Options mapping array
+     * @return mixed The label if found, otherwise the original value
+     */
+    private function convert_option_value_to_label( $field_id, $value, $options_map ) {
+        // Check if this field has an options mapping
+        if ( empty( $options_map[ $field_id ] ) ) {
+            return $value;
+        }
+
+        $field_options = $options_map[ $field_id ];
+
+        // Handle array values (checkboxes with multiple selections)
+        if ( is_array( $value ) ) {
+            $labels = array();
+            foreach ( $value as $single_value ) {
+                if ( isset( $field_options[ $single_value ] ) ) {
+                    $labels[] = $field_options[ $single_value ];
+                } else {
+                    // Keep original value if no mapping found
+                    $labels[] = $single_value;
+                }
+            }
+            return $labels;
+        }
+
+        // Handle single value (radio/select)
+        if ( isset( $field_options[ $value ] ) ) {
+            return $field_options[ $value ];
+        }
+
+        return $value;
     }
 
     /**
@@ -420,13 +475,17 @@ class Sheetinator_Sync_Handler {
         // Get field IDs for mapping
         $field_ids = $this->discovery->get_field_ids( $form_id );
 
+        // Get options map for radio/select/checkbox fields (value -> label mapping)
+        $options_map = $this->discovery->get_field_options_map( $form_id );
+
         // Add field IDs to debug
         $result['debug']['field_ids'] = array_slice( $field_ids, 0, 10 );
+        $result['debug']['options_map_fields'] = array_keys( $options_map );
 
         // Transform all entries to rows
         $all_rows = array();
         foreach ( $entries as $entry ) {
-            $all_rows[] = $this->transform_entry( $entry, $form_id, $field_ids, $result['debug'] );
+            $all_rows[] = $this->transform_entry( $entry, $form_id, $field_ids, $options_map, $result['debug'] );
         }
 
         // Add sample row to debug (first entry's data)
@@ -464,13 +523,14 @@ class Sheetinator_Sync_Handler {
     /**
      * Transform a Forminator entry to row format
      *
-     * @param object $entry     Entry object from Forminator_API
-     * @param int    $form_id   Form ID
-     * @param array  $field_ids Field IDs in order
-     * @param array  &$debug    Debug info array (passed by reference)
+     * @param object $entry       Entry object from Forminator_API
+     * @param int    $form_id     Form ID
+     * @param array  $field_ids   Field IDs in order
+     * @param array  $options_map Options mapping for radio/select/checkbox fields
+     * @param array  &$debug      Debug info array (passed by reference)
      * @return array Row data
      */
-    private function transform_entry( $entry, $form_id, $field_ids, &$debug = null ) {
+    private function transform_entry( $entry, $form_id, $field_ids, $options_map = array(), &$debug = null ) {
         $row = array();
 
         // Get entry ID
@@ -578,7 +638,7 @@ class Sheetinator_Sync_Handler {
 
         // Add field values in order
         foreach ( $field_ids as $field_id ) {
-            $row[] = $this->get_field_value( $field_id, $data_lookup );
+            $row[] = $this->get_field_value( $field_id, $data_lookup, $options_map );
         }
 
         return $row;

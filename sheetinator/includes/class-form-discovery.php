@@ -392,6 +392,80 @@ class Sheetinator_Form_Discovery {
     }
 
     /**
+     * Get field options mapping for radio/select/checkbox fields
+     *
+     * Returns a nested array: field_id => [ value => label, ... ]
+     * This allows converting stored values (like "one") to display labels (like "Easy").
+     *
+     * @param int $form_id Form ID
+     * @return array Options mapping
+     */
+    public function get_field_options_map( $form_id ) {
+        if ( ! class_exists( 'Forminator_API' ) ) {
+            return array();
+        }
+
+        $form_fields = Forminator_API::get_form_fields( $form_id );
+
+        if ( is_wp_error( $form_fields ) || empty( $form_fields ) ) {
+            return array();
+        }
+
+        $options_map = array();
+
+        foreach ( $form_fields as $field ) {
+            // Convert to array if object
+            if ( is_object( $field ) ) {
+                $field = get_object_vars( $field );
+            }
+
+            $element_id = $field['slug'] ?? $field['element_id'] ?? '';
+            $type       = $field['type'] ?? '';
+
+            if ( empty( $element_id ) ) {
+                continue;
+            }
+
+            // Only process fields that have options (radio, select, checkbox)
+            $option_types = array( 'radio', 'select', 'checkbox', 'multiselect' );
+
+            if ( ! in_array( $type, $option_types, true ) ) {
+                continue;
+            }
+
+            // Get options array - Forminator stores these in 'options' property
+            $options = $field['options'] ?? array();
+
+            if ( empty( $options ) || ! is_array( $options ) ) {
+                continue;
+            }
+
+            $value_to_label = array();
+
+            foreach ( $options as $option ) {
+                // Handle both object and array formats
+                if ( is_object( $option ) ) {
+                    $option = get_object_vars( $option );
+                }
+
+                $value = $option['value'] ?? '';
+                $label = $option['label'] ?? '';
+
+                // Only add mapping if we have both value and label, and they differ
+                if ( ! empty( $value ) && ! empty( $label ) ) {
+                    $value_to_label[ $value ] = $label;
+                }
+            }
+
+            if ( ! empty( $value_to_label ) ) {
+                $options_map[ $element_id ] = $value_to_label;
+            }
+        }
+
+        return $options_map;
+    }
+
+    /**
      * Check if Forminator is active and has forms
      *
      * @return bool
