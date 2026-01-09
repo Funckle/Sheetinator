@@ -1,0 +1,381 @@
+<?php
+/**
+ * Sheetinator Form Discovery
+ *
+ * Discovers and analyzes Forminator forms to extract:
+ * - Form metadata (ID, title, status)
+ * - Form fields with labels and types
+ * - Field structure for sheet headers
+ *
+ * @package Sheetinator
+ */
+
+// Prevent direct access
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+class Sheetinator_Form_Discovery {
+
+    /**
+     * Standard columns that are always included
+     */
+    const STANDARD_COLUMNS = array(
+        'Entry ID',
+        'Submission Date',
+        'Submission Time',
+        'User IP',
+    );
+
+    /**
+     * Get all Forminator custom forms
+     *
+     * @return array Array of form objects
+     */
+    public function get_all_forms() {
+        if ( ! class_exists( 'Forminator_API' ) ) {
+            return array();
+        }
+
+        $forms = Forminator_API::get_forms( null, 1, -1 );
+
+        if ( is_wp_error( $forms ) ) {
+            return array();
+        }
+
+        return $forms;
+    }
+
+    /**
+     * Get a single form by ID
+     *
+     * @param int $form_id Form ID
+     * @return object|null Form object or null
+     */
+    public function get_form( $form_id ) {
+        if ( ! class_exists( 'Forminator_API' ) ) {
+            return null;
+        }
+
+        $form = Forminator_API::get_form( $form_id );
+
+        if ( is_wp_error( $form ) ) {
+            return null;
+        }
+
+        return $form;
+    }
+
+    /**
+     * Get form title
+     *
+     * @param int $form_id Form ID
+     * @return string Form title
+     */
+    public function get_form_title( $form_id ) {
+        $form = $this->get_form( $form_id );
+
+        if ( ! $form ) {
+            return sprintf( 'Form #%d', $form_id );
+        }
+
+        $title = $form->settings['formName'] ?? $form->name ?? '';
+
+        if ( empty( $title ) ) {
+            return sprintf( 'Form #%d', $form_id );
+        }
+
+        return $title;
+    }
+
+    /**
+     * Get form fields with their labels
+     *
+     * @param int $form_id Form ID
+     * @return array Array of field info (element_id => label)
+     */
+    public function get_form_fields( $form_id ) {
+        $form = $this->get_form( $form_id );
+
+        if ( ! $form || empty( $form->fields ) ) {
+            return array();
+        }
+
+        $fields = array();
+
+        foreach ( $form->fields as $field ) {
+            $field_data = $this->parse_field( $field );
+
+            if ( ! empty( $field_data ) ) {
+                $fields = array_merge( $fields, $field_data );
+            }
+        }
+
+        return $fields;
+    }
+
+    /**
+     * Parse a single field into header columns
+     *
+     * @param object|array $field Field data
+     * @return array Array of element_id => label pairs
+     */
+    private function parse_field( $field ) {
+        // Handle both object and array formats
+        $field = (array) $field;
+
+        $element_id = $field['element_id'] ?? '';
+        $type       = $field['type'] ?? '';
+        $label      = $this->get_field_label( $field );
+
+        if ( empty( $element_id ) ) {
+            return array();
+        }
+
+        // Skip certain field types that don't produce data
+        $skip_types = array( 'section', 'page-break', 'html', 'captcha', 'gdprconsent' );
+
+        if ( in_array( $type, $skip_types, true ) ) {
+            return array();
+        }
+
+        // Handle compound fields (name, address, etc.)
+        switch ( $type ) {
+            case 'name':
+                return $this->parse_name_field( $field, $label );
+
+            case 'address':
+                return $this->parse_address_field( $field, $label );
+
+            case 'time':
+                return $this->parse_time_field( $field, $label );
+
+            case 'date':
+                return array( $element_id => $label ?: 'Date' );
+
+            case 'upload':
+                return array( $element_id => $label ?: 'File Upload' );
+
+            case 'postdata':
+                return $this->parse_postdata_field( $field, $label );
+
+            case 'group':
+                return $this->parse_group_field( $field );
+
+            default:
+                return array( $element_id => $label ?: ucfirst( $type ) );
+        }
+    }
+
+    /**
+     * Get field label from field data
+     *
+     * @param array $field Field data
+     * @return string Field label
+     */
+    private function get_field_label( $field ) {
+        // Try different label sources
+        $label = $field['field_label'] ?? '';
+
+        if ( empty( $label ) ) {
+            $label = $field['placeholder'] ?? '';
+        }
+
+        if ( empty( $label ) ) {
+            $label = $field['label'] ?? '';
+        }
+
+        // Clean up the label
+        $label = wp_strip_all_tags( $label );
+        $label = trim( $label );
+
+        return $label;
+    }
+
+    /**
+     * Parse name field into components
+     *
+     * @param array  $field Field data
+     * @param string $base_label Base label
+     * @return array
+     */
+    private function parse_name_field( $field, $base_label ) {
+        $element_id = $field['element_id'];
+        $prefix     = $base_label ?: 'Name';
+        $columns    = array();
+
+        // Check which components are enabled
+        $components = array(
+            'prefix'      => 'Prefix',
+            'first-name'  => 'First Name',
+            'middle-name' => 'Middle Name',
+            'last-name'   => 'Last Name',
+        );
+
+        foreach ( $components as $key => $label ) {
+            $field_key = str_replace( '-', '_', $key );
+
+            // Check if this component is enabled (default to first/last name enabled)
+            if ( in_array( $key, array( 'first-name', 'last-name' ), true ) ) {
+                $columns[ $element_id . '-' . $key ] = $prefix . ' - ' . $label;
+            } elseif ( ! empty( $field[ $field_key ] ) ) {
+                $columns[ $element_id . '-' . $key ] = $prefix . ' - ' . $label;
+            }
+        }
+
+        // If no specific components, use single column
+        if ( empty( $columns ) ) {
+            return array( $element_id => $prefix );
+        }
+
+        return $columns;
+    }
+
+    /**
+     * Parse address field into components
+     *
+     * @param array  $field Field data
+     * @param string $base_label Base label
+     * @return array
+     */
+    private function parse_address_field( $field, $base_label ) {
+        $element_id = $field['element_id'];
+        $prefix     = $base_label ?: 'Address';
+
+        $components = array(
+            'street_address' => 'Street Address',
+            'address_line'   => 'Address Line 2',
+            'city'           => 'City',
+            'state'          => 'State/Province',
+            'zip'            => 'ZIP/Postal Code',
+            'country'        => 'Country',
+        );
+
+        $columns = array();
+
+        foreach ( $components as $key => $label ) {
+            // Include all standard address components
+            $columns[ $element_id . '-' . $key ] = $prefix . ' - ' . $label;
+        }
+
+        return $columns;
+    }
+
+    /**
+     * Parse time field
+     *
+     * @param array  $field Field data
+     * @param string $label Field label
+     * @return array
+     */
+    private function parse_time_field( $field, $label ) {
+        $element_id = $field['element_id'];
+        $prefix     = $label ?: 'Time';
+
+        return array(
+            $element_id . '-hours'   => $prefix . ' - Hours',
+            $element_id . '-minutes' => $prefix . ' - Minutes',
+        );
+    }
+
+    /**
+     * Parse postdata field
+     *
+     * @param array  $field Field data
+     * @param string $label Field label
+     * @return array
+     */
+    private function parse_postdata_field( $field, $label ) {
+        $element_id = $field['element_id'];
+        $prefix     = $label ?: 'Post';
+
+        return array(
+            $element_id . '-post-title'   => $prefix . ' - Title',
+            $element_id . '-post-content' => $prefix . ' - Content',
+            $element_id . '-post-excerpt' => $prefix . ' - Excerpt',
+        );
+    }
+
+    /**
+     * Parse group/repeater field
+     *
+     * @param array $field Field data
+     * @return array
+     */
+    private function parse_group_field( $field ) {
+        $element_id = $field['element_id'];
+        $label      = $this->get_field_label( $field ) ?: 'Group';
+
+        // For groups, we'll store as JSON since rows can vary
+        return array( $element_id => $label . ' (JSON)' );
+    }
+
+    /**
+     * Build complete headers array for a form
+     *
+     * @param int $form_id Form ID
+     * @return array Headers array
+     */
+    public function build_headers( $form_id ) {
+        // Start with standard columns
+        $headers = self::STANDARD_COLUMNS;
+
+        // Get form fields
+        $fields = $this->get_form_fields( $form_id );
+
+        // Add field labels as headers
+        foreach ( $fields as $element_id => $label ) {
+            $headers[] = $label;
+        }
+
+        return $headers;
+    }
+
+    /**
+     * Get field element IDs in order (for matching data to columns)
+     *
+     * @param int $form_id Form ID
+     * @return array Array of element IDs
+     */
+    public function get_field_ids( $form_id ) {
+        $fields = $this->get_form_fields( $form_id );
+        return array_keys( $fields );
+    }
+
+    /**
+     * Check if Forminator is active and has forms
+     *
+     * @return bool
+     */
+    public function has_forms() {
+        $forms = $this->get_all_forms();
+        return ! empty( $forms );
+    }
+
+    /**
+     * Get summary of all forms with sync status
+     *
+     * @param Sheetinator_Google_Sheets $sheets Google Sheets handler
+     * @return array
+     */
+    public function get_forms_summary( $sheets ) {
+        $forms   = $this->get_all_forms();
+        $summary = array();
+
+        foreach ( $forms as $form ) {
+            $form_id   = $form->id;
+            $has_sheet = $sheets->has_mapping( $form_id );
+
+            $summary[] = array(
+                'id'              => $form_id,
+                'title'           => $this->get_form_title( $form_id ),
+                'status'          => $form->status ?? 'publish',
+                'synced'          => $has_sheet,
+                'spreadsheet_url' => $has_sheet ? $sheets->get_spreadsheet_url( $form_id ) : null,
+                'field_count'     => count( $this->get_form_fields( $form_id ) ),
+            );
+        }
+
+        return $summary;
+    }
+}
