@@ -197,7 +197,33 @@ class Sheetinator_Admin {
             check_admin_referer( 'sheetinator_import' );
 
             $form_id = absint( $_GET['form_id'] );
-            $result  = $this->plugin->sync_handler->import_existing_entries( $form_id );
+
+            // Debug: Get a sample entry to see its structure
+            $debug_info = '';
+            if ( class_exists( 'Forminator_API' ) ) {
+                $entries = Forminator_API::get_form_entries( $form_id );
+                if ( ! empty( $entries ) && ! is_wp_error( $entries ) ) {
+                    $sample_entry = $entries[0];
+                    $meta_keys = array();
+                    if ( isset( $sample_entry->meta_data ) && is_array( $sample_entry->meta_data ) ) {
+                        foreach ( $sample_entry->meta_data as $meta ) {
+                            if ( is_object( $meta ) ) {
+                                $meta_keys[] = $meta->name ?? '?';
+                            } else {
+                                $meta_keys[] = $meta['name'] ?? '?';
+                            }
+                        }
+                    }
+                    $field_ids = $this->plugin->form_discovery->get_field_ids( $form_id );
+                    $debug_info = sprintf(
+                        ' [DEBUG: Entry has keys: %s | Expected field IDs: %s]',
+                        implode( ', ', array_slice( $meta_keys, 0, 5 ) ),
+                        implode( ', ', array_slice( $field_ids, 0, 5 ) )
+                    );
+                }
+            }
+
+            $result = $this->plugin->sync_handler->import_existing_entries( $form_id );
 
             if ( ! empty( $result['errors'] ) && $result['imported'] === 0 ) {
                 set_transient( 'sheetinator_notice', array(
@@ -205,7 +231,7 @@ class Sheetinator_Admin {
                     'message' => sprintf(
                         __( 'Import failed: %s', 'sheetinator' ),
                         implode( ', ', array_slice( $result['errors'], 0, 3 ) )
-                    ),
+                    ) . $debug_info,
                 ), 60 );
             } else {
                 $message = sprintf(
@@ -217,6 +243,8 @@ class Sheetinator_Admin {
                 if ( $result['failed'] > 0 ) {
                     $message .= sprintf( __( ' (%d failed)', 'sheetinator' ), $result['failed'] );
                 }
+
+                $message .= $debug_info;
 
                 set_transient( 'sheetinator_notice', array(
                     'type'    => $result['failed'] > 0 ? 'warning' : 'success',

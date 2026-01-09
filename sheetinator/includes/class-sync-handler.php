@@ -464,28 +464,51 @@ class Sheetinator_Sync_Handler {
         $row[] = wp_date( 'Y-m-d', strtotime( $entry->date_created ?? 'now' ) );
         $row[] = wp_date( 'H:i:s', strtotime( $entry->date_created ?? 'now' ) );
 
-        // Get IP from entry meta if available
-        $ip = '';
-        if ( isset( $entry->meta_data ) && is_array( $entry->meta_data ) ) {
-            foreach ( $entry->meta_data as $meta ) {
-                if ( isset( $meta['name'] ) && $meta['name'] === '_forminator_user_ip' ) {
-                    $ip = $meta['value'] ?? '';
-                    break;
-                }
-            }
-        }
-        $row[] = $ip;
-
         // Build data lookup from entry meta
         $data_lookup = array();
+        $ip = '';
+
         if ( isset( $entry->meta_data ) && is_array( $entry->meta_data ) ) {
             foreach ( $entry->meta_data as $meta ) {
-                $name = $meta['name'] ?? '';
-                $value = $meta['value'] ?? '';
-                if ( ! empty( $name ) && strpos( $name, '_' ) !== 0 ) { // Skip internal meta
-                    $data_lookup[ $name ] = $value;
+                // Handle both array and object formats
+                if ( is_object( $meta ) ) {
+                    $name = $meta->name ?? '';
+                    $value = $meta->value ?? '';
+                } else {
+                    $name = $meta['name'] ?? '';
+                    $value = $meta['value'] ?? '';
                 }
+
+                if ( empty( $name ) ) {
+                    continue;
+                }
+
+                // Get IP address
+                if ( $name === '_forminator_user_ip' ) {
+                    $ip = $value;
+                    continue;
+                }
+
+                // Skip other internal meta fields
+                if ( strpos( $name, '_' ) === 0 ) {
+                    continue;
+                }
+
+                // Unserialize value if needed (Forminator stores compound fields serialized)
+                $value = maybe_unserialize( $value );
+
+                $data_lookup[ $name ] = $value;
             }
+        }
+
+        $row[] = $ip;
+
+        // Debug: Log first entry's data lookup
+        static $logged_sample = false;
+        if ( ! $logged_sample ) {
+            error_log( '[Sheetinator] Sample entry meta keys: ' . wp_json_encode( array_keys( $data_lookup ) ) );
+            error_log( '[Sheetinator] Expected field IDs: ' . wp_json_encode( array_slice( $field_ids, 0, 10 ) ) );
+            $logged_sample = true;
         }
 
         // Add field values in order
