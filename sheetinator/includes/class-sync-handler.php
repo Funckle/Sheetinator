@@ -363,6 +363,125 @@ class Sheetinator_Sync_Handler {
     }
 
     /**
+     * Import existing entries from Forminator to Google Sheets
+     *
+     * @param int $form_id Form ID
+     * @return array Result with counts
+     */
+    public function import_existing_entries( $form_id ) {
+        $result = array(
+            'imported' => 0,
+            'failed'   => 0,
+            'total'    => 0,
+            'errors'   => array(),
+        );
+
+        // Check if form has a spreadsheet mapping
+        if ( ! $this->sheets->has_mapping( $form_id ) ) {
+            $result['errors'][] = __( 'Form is not synced. Please sync the form first.', 'sheetinator' );
+            return $result;
+        }
+
+        $spreadsheet_id = $this->sheets->get_spreadsheet_id( $form_id );
+
+        if ( ! $spreadsheet_id ) {
+            $result['errors'][] = __( 'No spreadsheet found for this form.', 'sheetinator' );
+            return $result;
+        }
+
+        // Get all form entries from Forminator
+        if ( ! class_exists( 'Forminator_API' ) ) {
+            $result['errors'][] = __( 'Forminator API not available.', 'sheetinator' );
+            return $result;
+        }
+
+        $entries = Forminator_API::get_form_entries( $form_id );
+
+        if ( is_wp_error( $entries ) ) {
+            $result['errors'][] = $entries->get_error_message();
+            return $result;
+        }
+
+        if ( empty( $entries ) ) {
+            $result['errors'][] = __( 'No entries found for this form.', 'sheetinator' );
+            return $result;
+        }
+
+        $result['total'] = count( $entries );
+
+        // Get field IDs for mapping
+        $field_ids = $this->discovery->get_field_ids( $form_id );
+
+        // Process each entry
+        foreach ( $entries as $entry ) {
+            $row_data = $this->transform_entry( $entry, $form_id, $field_ids );
+
+            $append_result = $this->sheets->append_row( $spreadsheet_id, $row_data );
+
+            if ( is_wp_error( $append_result ) ) {
+                $result['failed']++;
+                $result['errors'][] = sprintf(
+                    __( 'Entry #%d: %s', 'sheetinator' ),
+                    $entry->entry_id ?? 0,
+                    $append_result->get_error_message()
+                );
+            } else {
+                $result['imported']++;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Transform a Forminator entry to row format
+     *
+     * @param object $entry     Entry object from Forminator_API
+     * @param int    $form_id   Form ID
+     * @param array  $field_ids Field IDs in order
+     * @return array Row data
+     */
+    private function transform_entry( $entry, $form_id, $field_ids ) {
+        $row = array();
+
+        // Add standard columns
+        $row[] = $entry->entry_id ?? '';
+        $row[] = wp_date( 'Y-m-d', strtotime( $entry->date_created ?? 'now' ) );
+        $row[] = wp_date( 'H:i:s', strtotime( $entry->date_created ?? 'now' ) );
+
+        // Get IP from entry meta if available
+        $ip = '';
+        if ( isset( $entry->meta_data ) && is_array( $entry->meta_data ) ) {
+            foreach ( $entry->meta_data as $meta ) {
+                if ( isset( $meta['name'] ) && $meta['name'] === '_forminator_user_ip' ) {
+                    $ip = $meta['value'] ?? '';
+                    break;
+                }
+            }
+        }
+        $row[] = $ip;
+
+        // Build data lookup from entry meta
+        $data_lookup = array();
+        if ( isset( $entry->meta_data ) && is_array( $entry->meta_data ) ) {
+            foreach ( $entry->meta_data as $meta ) {
+                $name = $meta['name'] ?? '';
+                $value = $meta['value'] ?? '';
+                if ( ! empty( $name ) && strpos( $name, '_' ) !== 0 ) { // Skip internal meta
+                    $data_lookup[ $name ] = $value;
+                }
+            }
+        }
+
+        // Add field values in order
+        foreach ( $field_ids as $field_id ) {
+            $row[] = $this->get_field_value( $field_id, $data_lookup );
+        }
+
+        return $row;
+    }
+
+    /**
      * Log successful sync
      *
      * @param int $form_id  Form ID

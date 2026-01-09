@@ -191,6 +191,42 @@ class Sheetinator_Admin {
             wp_safe_redirect( admin_url( 'admin.php?page=sheetinator' ) );
             exit;
         }
+
+        // Import existing entries
+        if ( isset( $_GET['action'] ) && $_GET['action'] === 'import' && isset( $_GET['form_id'] ) ) {
+            check_admin_referer( 'sheetinator_import' );
+
+            $form_id = absint( $_GET['form_id'] );
+            $result  = $this->plugin->sync_handler->import_existing_entries( $form_id );
+
+            if ( ! empty( $result['errors'] ) && $result['imported'] === 0 ) {
+                set_transient( 'sheetinator_notice', array(
+                    'type'    => 'error',
+                    'message' => sprintf(
+                        __( 'Import failed: %s', 'sheetinator' ),
+                        implode( ', ', array_slice( $result['errors'], 0, 3 ) )
+                    ),
+                ), 60 );
+            } else {
+                $message = sprintf(
+                    __( 'Import complete! %d of %d entries imported.', 'sheetinator' ),
+                    $result['imported'],
+                    $result['total']
+                );
+
+                if ( $result['failed'] > 0 ) {
+                    $message .= sprintf( __( ' (%d failed)', 'sheetinator' ), $result['failed'] );
+                }
+
+                set_transient( 'sheetinator_notice', array(
+                    'type'    => $result['failed'] > 0 ? 'warning' : 'success',
+                    'message' => $message,
+                ), 60 );
+            }
+
+            wp_safe_redirect( admin_url( 'admin.php?page=sheetinator' ) );
+            exit;
+        }
     }
 
     /**
@@ -481,6 +517,14 @@ class Sheetinator_Admin {
                                     </td>
                                     <td>
                                         <?php if ( $form['synced'] ) : ?>
+                                            <a href="<?php echo esc_url( wp_nonce_url(
+                                                admin_url( 'admin.php?page=sheetinator&action=import&form_id=' . $form['id'] ),
+                                                'sheetinator_import'
+                                            ) ); ?>"
+                                               class="button button-small button-primary"
+                                               title="<?php esc_attr_e( 'Import all existing Forminator entries to Google Sheets', 'sheetinator' ); ?>">
+                                                <?php esc_html_e( 'Import', 'sheetinator' ); ?>
+                                            </a>
                                             <a href="<?php echo esc_url( wp_nonce_url(
                                                 admin_url( 'admin.php?page=sheetinator&action=resync&form_id=' . $form['id'] ),
                                                 'sheetinator_resync'
