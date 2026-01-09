@@ -127,30 +127,32 @@ class Sheetinator_Form_Discovery {
      * Forminator_API::get_form_fields() returns field objects with properties:
      * - slug: field identifier (e.g., 'text-1', 'name-1')
      * - type: field type (e.g., 'text', 'name', 'email')
-     * - field_label: the label shown to users
+     * - get_label_for_entry(): method to get the field label
      * - And various type-specific properties
      *
      * @param object|array $field Field data from Forminator API
      * @return array Array of element_id => label pairs
      */
     private function parse_field( $field ) {
+        // Get label BEFORE converting to array (uses method on object)
+        $label = '';
+        if ( is_object( $field ) && method_exists( $field, 'get_label_for_entry' ) ) {
+            $label = $field->get_label_for_entry();
+        }
+
         // Handle both object and array formats
         if ( is_object( $field ) ) {
             $field = get_object_vars( $field );
         }
 
-        // Debug: Log first field structure to understand Forminator's format
-        static $logged_sample = false;
-        if ( ! $logged_sample ) {
-            error_log( '[Sheetinator] Sample field structure: ' . wp_json_encode( array_keys( $field ) ) );
-            error_log( '[Sheetinator] Sample field data: ' . wp_json_encode( $field ) );
-            $logged_sample = true;
+        // If we didn't get label from method, try properties
+        if ( empty( $label ) ) {
+            $label = $this->get_field_label( $field );
         }
 
         // Forminator uses 'slug' as the field identifier
         $element_id = $field['slug'] ?? $field['element_id'] ?? '';
         $type       = $field['type'] ?? '';
-        $label      = $this->get_field_label( $field );
 
         if ( empty( $element_id ) ) {
             return array();
