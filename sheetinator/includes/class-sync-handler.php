@@ -54,10 +54,10 @@ class Sheetinator_Sync_Handler {
      * This hook fires AFTER the entry is saved, so we can use get_meta() to retrieve
      * field values and the full form configuration is available for option label mapping.
      *
-     * @param int    $form_id Form ID
-     * @param object $entry   Entry object
+     * @param int $form_id  Form ID
+     * @param int $entry_id Entry ID (not the entry object!)
      */
-    public function handle_saved_entry( $form_id, $entry ) {
+    public function handle_saved_entry( $form_id, $entry_id ) {
         // Check if this form has a spreadsheet mapping
         if ( ! $this->sheets->has_mapping( $form_id ) ) {
             return;
@@ -68,6 +68,14 @@ class Sheetinator_Sync_Handler {
 
         if ( ! $spreadsheet_id ) {
             $this->log_error( $form_id, 'No spreadsheet ID found for form.' );
+            return;
+        }
+
+        // Fetch the full entry object using the entry ID
+        $entry = Forminator_API::get_entry( $form_id, $entry_id );
+
+        if ( is_wp_error( $entry ) || ! $entry ) {
+            $this->log_error( $form_id, 'Could not retrieve entry #' . $entry_id );
             return;
         }
 
@@ -85,7 +93,7 @@ class Sheetinator_Sync_Handler {
             $this->log_error( $form_id, $result->get_error_message() );
             $this->notify_admin_error( $form_id, $result->get_error_message() );
         } else {
-            $this->log_success( $form_id, $entry->entry_id ?? 0 );
+            $this->log_success( $form_id, $entry_id );
         }
     }
 
