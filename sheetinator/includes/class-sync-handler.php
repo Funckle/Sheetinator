@@ -49,7 +49,48 @@ class Sheetinator_Sync_Handler {
     }
 
     /**
-     * Handle form submission - hook callback
+     * Handle saved entry - hook callback for forminator_custom_form_after_save_entry
+     *
+     * This hook fires AFTER the entry is saved, so we can use get_meta() to retrieve
+     * field values and the full form configuration is available for option label mapping.
+     *
+     * @param int    $form_id Form ID
+     * @param object $entry   Entry object
+     */
+    public function handle_saved_entry( $form_id, $entry ) {
+        // Check if this form has a spreadsheet mapping
+        if ( ! $this->sheets->has_mapping( $form_id ) ) {
+            return;
+        }
+
+        // Get spreadsheet ID
+        $spreadsheet_id = $this->sheets->get_spreadsheet_id( $form_id );
+
+        if ( ! $spreadsheet_id ) {
+            $this->log_error( $form_id, 'No spreadsheet ID found for form.' );
+            return;
+        }
+
+        // Get field IDs and options map
+        $field_ids   = $this->discovery->get_field_ids( $form_id );
+        $options_map = $this->discovery->get_field_options_map( $form_id );
+
+        // Transform the saved entry to row format (reuses same logic as import)
+        $row_data = $this->transform_entry( $entry, $form_id, $field_ids, $options_map );
+
+        // Append row to spreadsheet
+        $result = $this->sheets->append_row( $spreadsheet_id, $row_data );
+
+        if ( is_wp_error( $result ) ) {
+            $this->log_error( $form_id, $result->get_error_message() );
+            $this->notify_admin_error( $form_id, $result->get_error_message() );
+        } else {
+            $this->log_success( $form_id, $entry->entry_id ?? 0 );
+        }
+    }
+
+    /**
+     * Handle form submission - hook callback (legacy, for before_set_fields hook)
      *
      * @param object $entry      Entry object
      * @param int    $form_id    Form ID

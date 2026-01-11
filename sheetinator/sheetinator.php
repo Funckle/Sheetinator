@@ -115,7 +115,8 @@ final class Sheetinator {
         $this->admin          = new Sheetinator_Admin( $this );
 
         // Hook into Forminator form submissions (after entry is saved, so all data is available)
-        add_action( 'forminator_custom_form_after_save_entry', array( $this->sync_handler, 'handle_submission' ), 10, 3 );
+        // This hook passes: $form_id, $entry (different order, no $field_data)
+        add_action( 'forminator_custom_form_after_save_entry', array( $this->sync_handler, 'handle_saved_entry' ), 10, 2 );
     }
 
     /**
