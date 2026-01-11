@@ -120,19 +120,45 @@ class Sheetinator_Sync_Handler {
     /**
      * Build lookup array from field data
      *
+     * Forminator passes field data in different formats depending on context.
+     * This method normalizes the data into a simple field_id => value lookup.
+     *
      * @param array $field_data Submitted field data
      * @return array Lookup array
      */
     private function build_data_lookup( $field_data ) {
         $lookup = array();
 
-        foreach ( $field_data as $field ) {
-            $name  = $field['name'] ?? '';
-            $value = $field['value'] ?? '';
-
-            if ( ! empty( $name ) ) {
-                $lookup[ $name ] = $value;
+        foreach ( $field_data as $key => $field ) {
+            // Handle associative array format (field_id => value)
+            if ( is_string( $key ) && ! is_numeric( $key ) ) {
+                $name = $key;
+                $value = $field;
             }
+            // Handle array of arrays/objects format
+            elseif ( is_array( $field ) ) {
+                // Try multiple possible key names for the field identifier
+                $name = $field['name'] ?? $field['element_id'] ?? $field['field_id'] ?? $field['slug'] ?? '';
+                $value = $field['value'] ?? '';
+            }
+            elseif ( is_object( $field ) ) {
+                $name = $field->name ?? $field->element_id ?? $field->field_id ?? $field->slug ?? '';
+                $value = $field->value ?? '';
+            }
+            else {
+                continue;
+            }
+
+            if ( empty( $name ) ) {
+                continue;
+            }
+
+            // Handle nested value structures (some fields store value as array with 'value' key)
+            if ( is_array( $value ) && isset( $value['value'] ) && ! isset( $value[0] ) ) {
+                $value = $value['value'];
+            }
+
+            $lookup[ $name ] = $value;
         }
 
         return $lookup;
