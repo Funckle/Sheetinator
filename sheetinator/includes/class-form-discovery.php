@@ -410,132 +410,58 @@ class Sheetinator_Form_Discovery {
         // Method 1: Try to get options from form wrappers (raw form data)
         $form = Forminator_API::get_form( $form_id );
         if ( ! is_wp_error( $form ) && $form ) {
-            // Forminator stores fields in 'wrappers' with field settings
             $wrappers = array();
 
             // Try different ways to access form fields/wrappers
-            if ( isset( $form->fields ) ) {
-                $wrappers = $form->fields;
-            } elseif ( method_exists( $form, 'get_fields' ) ) {
-                $wrappers = $form->get_fields();
-            } elseif ( isset( $form->settings['wrappers'] ) ) {
+            if ( isset( $form->settings ) && is_array( $form->settings ) && ! empty( $form->settings['wrappers'] ) && is_array( $form->settings['wrappers'] ) ) {
                 $wrappers = $form->settings['wrappers'];
             }
 
-            foreach ( $wrappers as $wrapper ) {
-                // Handle wrapper structure (array of fields)
-                $fields_in_wrapper = array();
-
-                if ( isset( $wrapper['fields'] ) ) {
-                    $fields_in_wrapper = $wrapper['fields'];
-                } elseif ( is_array( $wrapper ) && isset( $wrapper['element_id'] ) ) {
-                    // Single field, not wrapped
-                    $fields_in_wrapper = array( $wrapper );
-                }
-
-                foreach ( $fields_in_wrapper as $field_data ) {
-                    if ( is_object( $field_data ) ) {
-                        $field_data = get_object_vars( $field_data );
-                    }
-
-                    $element_id = $field_data['element_id'] ?? $field_data['slug'] ?? '';
-                    $type = $field_data['type'] ?? '';
-
-                    if ( empty( $element_id ) ) {
+            if ( ! empty( $wrappers ) && is_array( $wrappers ) ) {
+                foreach ( $wrappers as $wrapper ) {
+                    if ( ! is_array( $wrapper ) || empty( $wrapper['fields'] ) || ! is_array( $wrapper['fields'] ) ) {
                         continue;
                     }
 
-                    // Only process fields that have options
-                    $option_types = array( 'radio', 'select', 'checkbox', 'multiselect' );
-                    if ( ! in_array( $type, $option_types, true ) ) {
-                        continue;
-                    }
-
-                    // Get options - try multiple possible locations
-                    $options = $field_data['options'] ?? $field_data['values'] ?? array();
-
-                    if ( empty( $options ) || ! is_array( $options ) ) {
-                        continue;
-                    }
-
-                    $value_to_label = array();
-                    foreach ( $options as $option ) {
-                        if ( is_object( $option ) ) {
-                            $option = get_object_vars( $option );
+                    foreach ( $wrapper['fields'] as $field_data ) {
+                        if ( ! is_array( $field_data ) ) {
+                            continue;
                         }
 
-                        $value = $option['value'] ?? '';
-                        $label = $option['label'] ?? '';
+                        $element_id = $field_data['element_id'] ?? '';
+                        $type = $field_data['type'] ?? '';
 
-                        if ( ! empty( $value ) && ! empty( $label ) ) {
-                            $value_to_label[ $value ] = $label;
-                        }
-                    }
-
-                    if ( ! empty( $value_to_label ) ) {
-                        $options_map[ $element_id ] = $value_to_label;
-                    }
-                }
-            }
-        }
-
-        // Method 2: Fallback to get_form_fields if Method 1 didn't find options
-        if ( empty( $options_map ) ) {
-            $form_fields = Forminator_API::get_form_fields( $form_id );
-
-            if ( ! is_wp_error( $form_fields ) && ! empty( $form_fields ) ) {
-                foreach ( $form_fields as $field ) {
-                    // Try to access options property directly on object first
-                    $options = null;
-                    $element_id = '';
-                    $type = '';
-
-                    if ( is_object( $field ) ) {
-                        // Try direct property access
-                        $element_id = $field->slug ?? $field->element_id ?? '';
-                        $type = $field->type ?? '';
-                        $options = $field->options ?? null;
-
-                        // If options not found, try converting to array
-                        if ( $options === null ) {
-                            $field_array = get_object_vars( $field );
-                            $options = $field_array['options'] ?? $field_array['values'] ?? array();
-                        }
-                    } else {
-                        $element_id = $field['slug'] ?? $field['element_id'] ?? '';
-                        $type = $field['type'] ?? '';
-                        $options = $field['options'] ?? $field['values'] ?? array();
-                    }
-
-                    if ( empty( $element_id ) ) {
-                        continue;
-                    }
-
-                    $option_types = array( 'radio', 'select', 'checkbox', 'multiselect' );
-                    if ( ! in_array( $type, $option_types, true ) ) {
-                        continue;
-                    }
-
-                    if ( empty( $options ) || ! is_array( $options ) ) {
-                        continue;
-                    }
-
-                    $value_to_label = array();
-                    foreach ( $options as $option ) {
-                        if ( is_object( $option ) ) {
-                            $option = get_object_vars( $option );
+                        if ( empty( $element_id ) || empty( $type ) ) {
+                            continue;
                         }
 
-                        $value = $option['value'] ?? '';
-                        $label = $option['label'] ?? '';
-
-                        if ( ! empty( $value ) && ! empty( $label ) ) {
-                            $value_to_label[ $value ] = $label;
+                        // Only process fields that have options
+                        $option_types = array( 'radio', 'select', 'checkbox', 'multiselect' );
+                        if ( ! in_array( $type, $option_types, true ) ) {
+                            continue;
                         }
-                    }
 
-                    if ( ! empty( $value_to_label ) ) {
-                        $options_map[ $element_id ] = $value_to_label;
+                        // Get options
+                        $options = $field_data['options'] ?? array();
+                        if ( empty( $options ) || ! is_array( $options ) ) {
+                            continue;
+                        }
+
+                        $value_to_label = array();
+                        foreach ( $options as $option ) {
+                            if ( ! is_array( $option ) ) {
+                                continue;
+                            }
+                            $value = $option['value'] ?? '';
+                            $label = $option['label'] ?? '';
+                            if ( ! empty( $value ) && ! empty( $label ) ) {
+                                $value_to_label[ $value ] = $label;
+                            }
+                        }
+
+                        if ( ! empty( $value_to_label ) ) {
+                            $options_map[ $element_id ] = $value_to_label;
+                        }
                     }
                 }
             }
