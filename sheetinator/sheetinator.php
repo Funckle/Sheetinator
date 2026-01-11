@@ -114,9 +114,9 @@ final class Sheetinator {
         $this->sync_handler   = new Sheetinator_Sync_Handler( $this->google_sheets, $this->form_discovery );
         $this->admin          = new Sheetinator_Admin( $this );
 
-        // Hook into Forminator form submissions (after entry is saved, so all data is available)
-        // This hook passes: $form_id, $entry (different order, no $field_data)
-        add_action( 'forminator_custom_form_after_save_entry', array( $this->sync_handler, 'handle_saved_entry' ), 10, 2 );
+        // Hook into Forminator form submissions
+        // Uses before_set_fields hook which provides $entry, $form_id, $field_data
+        add_action( 'forminator_custom_form_submit_before_set_fields', array( $this->sync_handler, 'handle_submission' ), 10, 3 );
     }
 
     /**
